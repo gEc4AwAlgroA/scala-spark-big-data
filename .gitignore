@@ -1,4 +1,4 @@
 target/
 .idea/
 workspace.xml
-/week1/wikipedia/wikipedia.dat
+/week1/wikipedia/src/main/resources/wikipedia/wikipedia.dat

@@ -16,6 +16,7 @@ object StackOverflow extends StackOverflow {
 
   @transient lazy val conf: SparkConf = new SparkConf().setMaster("local").setAppName("StackOverflow")
   @transient lazy val sc: SparkContext = new SparkContext(conf)
+  sc.setLogLevel("WARN")
 
   /** Main function */
   def main(args: Array[String]): Unit = {
@@ -78,7 +79,9 @@ class StackOverflow extends Serializable {
 
   /** Group the questions and answers together */
   def groupedPostings(postings: RDD[Posting]): RDD[(Int, Iterable[(Posting, Posting)])] = {
-    ???
+    val questions: RDD[(Int, Posting)] = postings.filter(_.postingType == 1).map(p => (p.id, p))
+    val answers: RDD[(Int, Posting)] = postings.filter(_.postingType == 2).map(p => (p.parentId.get, p))
+    questions.join(answers).groupByKey() // no interest in unanswered questions?
   }
 
 
@@ -97,7 +100,10 @@ class StackOverflow extends Serializable {
       highScore
     }
 
-    ???
+    grouped.map({case (k,v) =>
+      val (first, second) = v.unzip
+      (first.head, answerHighScore(second.toArray))
+    })
   }
 
 
@@ -117,7 +123,10 @@ class StackOverflow extends Serializable {
       }
     }
 
-    ???
+    scored.map({ case (k, v) =>
+      (firstLangInTag(k.tags, langs).get * langSpread, v)
+    })
+
   }
 
 
@@ -172,9 +181,11 @@ class StackOverflow extends Serializable {
 
   /** Main kmeans computation */
   @tailrec final def kmeans(means: Array[(Int, Int)], vectors: RDD[(Int, Int)], iter: Int = 1, debug: Boolean = false): Array[(Int, Int)] = {
-    val newMeans = means.clone() // you need to compute newMeans
-
-    // TODO: Fill in the newMeans array
+    vectors.cache()
+    val newMeans = means.clone()
+    vectors.map(x => (findClosest(x, means), x))
+      .groupByKey().mapValues(averageVectors(_))
+      .collect().foreach({case(k,v) => newMeans.update(k, v) })
     val distance = euclideanDistance(means, newMeans)
 
     if (debug) {
@@ -273,10 +284,19 @@ class StackOverflow extends Serializable {
     val closestGrouped = closest.groupByKey()
 
     val median = closestGrouped.mapValues { vs =>
-      val langLabel: String   = ??? // most common language in the cluster
-      val langPercent: Double = ??? // percent of the questions in the most common language
-      val clusterSize: Int    = ???
-      val medianScore: Int    = ???
+      val topLangElement: (Int, Int) = vs.groupBy(_._1).mapValues(_.size).toArray.maxBy(_._2)
+      // most common language in the cluster
+      val langLabel: String   = langs(topLangElement._1 / langSpread)
+      // percent of the questions in the most common language
+      val langPercent: Double = 100 * topLangElement._2 / vs.size
+      val clusterSize: Int    = vs.size
+      val sortedScores: Array[Int] = vs.toArray.map(_._2).sorted
+      val medianScore: Int    = {
+        if (sortedScores.length % 2 == 0)
+          (sortedScores(sortedScores.length / 2 - 1) + sortedScores(sortedScores.length / 2)) / 2
+        else
+          sortedScores(sortedScores.length / 2)
+      }
 
       (langLabel, langPercent, clusterSize, medianScore)
     }
